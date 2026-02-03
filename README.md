@@ -23,17 +23,24 @@ An advanced, memory-pattern based automated fishing assistant for Terraria. Feat
 ---
 
 ## 🚀 Usage
-The script starts automatically after the line is cast. Please keep the cursor position still; the program will simulate mouse clicks automatically.
+
+> [!IMPORTANT]
+> The script starts automatically after the line is cast. Please keep the cursor position still; the program will simulate mouse clicks automatically.
+
 ### GUI Mode (Recommended)
 ```sh
 uv run main.py
+
 ```
 
 ### Console Mode (Logic Only)
+
 ```sh
 uv run main_console.py
+
 ```
-**Note:** The console mode cannot read config.ini. Please manually modify the source code to set the filter and mode.
+
+**Note:** Console mode operates independently and does **not** read `config.ini`. Please modify the source code variables to adjust filters and modes.
 
 ---
 
@@ -43,13 +50,12 @@ uv run main_console.py
 | --- | --- |
 | <img src="./image/main.png" height="300" alt="Main UI" /> | <img src="./image/filter.png" height="300" alt="Filter UI" /> |
 
-> **Note**: The Filter button grays out when "Catch-All" is selected.
-
 ---
 
 ## 🛠️ Info
 
 * **Game Version**: Tested on **Terraria 1.4.5.3** (Single Player and Dedicated Server).
+* **Privileges**: Please run with **Administrator rights** to allow memory access.
 * **Environment**: Python 3.13+ (Dependencies managed by `uv`).
 
 ---
