@@ -11,11 +11,11 @@ RECAST_DELAY = 0.1
 CHECK_INTERVAL = 0.05
 
 # Debug 模式：加快鱼释放，ALL 模式时修改渔获
-DEBUG_MODE = True
-DEBUG_FISH = 5064
+DEBUG_MODE = False
+DEBUG_FISH = 5275
 
 # 运行模式选择: "BLACKLIST" (黑名单模式) / "WHITELIST" (白名单模式) / "ALL" (全部捕获)
-RUN_MODE = "WHITELIST"
+RUN_MODE = "ALL"
 
 from fish import *
 
