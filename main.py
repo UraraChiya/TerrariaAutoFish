@@ -84,15 +84,40 @@ def human_click():
     pyautogui.mouseUp()
 
 def get_base_by_pattern(pm):
-    # 动态搜索，不使用硬编码 staticPtr
-    pattern = b"\x55\x8b\xec\x57\x56\x53\x83\xec.\x33\xc0\x89\x45.\x8b\xd9\x83\x7a\x44\x00"
+    # 更新后的特征码：
+    # 变化点：原本的 \x7a\x44\x00 变为了 \x7a\x48\x00 (对应汇编 cmp dword ptr [edx+48],00)
+    pattern = b"\x55\x8b\xec\x57\x56\x53\x83\xec.\x33\xc0\x89\x45.\x8b\xd9\x83\x7a\x48\x00"
+    try:
+        # 搜索函数入口点
+        func_start = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=False)
+        if func_start:
+            # 根据你提供的 dump，目标指令 A1 (mov eax,[xxxx]) 依然在偏移 0x2C 处
+            # +2C- A1 685EBD06 - mov eax,[06BD5E68]
+            target_ins = func_start + 0x2C
+            if pm.read_bytes(target_ins, 1) == b"\xa1":
+                # 读取 A1 之后的 4 字节地址
+                return pm.read_uint(target_ins + 1)
+    except Exception as e:
+        print(f"定位 proj 出错: {e}")
+    return None
+
+def get_myPlayer_addr(pm):
+    # 特征码匹配 SelectPlayer 函数开头
+    # 55 8B EC 56 83 EC 08 8B F1 8B 46 18 83 B8 1C 02 00 00 00
+    pattern = b"\x55\x8b\xec\x56\x83\xec\x08\x8b\xf1\x8b\x46\x18\x83\xb8\x1c\x02\x00\x00\x00"
+    
     try:
         func_start = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=False)
         if func_start:
-            target_ins = func_start + 0x2C
-            if pm.read_bytes(target_ins, 1) == b"\xa1":
-                return pm.read_uint(target_ins + 1)
-    except: return None
+            # 根据汇编，myPlayer 的地址位于函数开头 + 0x1B 处的指令中
+            # 指令是 89 15 [E8 6B BA 05]
+            # 89 15 后面紧跟的 4 个字节就是目标地址
+            target_ins = func_start + 0x1B
+            if pm.read_bytes(target_ins, 2) == b"\x89\x15":
+                return pm.read_uint(target_ins + 2)
+    except Exception as e:
+        print(f"定位 myPlayer 出错: {e}")
+    return None
 
 def start_fishing():
     global RUN_MODE, DEBUG_FISH, FISH_BLACKLIST, FISH_WHITELIST, IS_RUNNING, DEBUG_FORCE_FISH, DEBUG_FAST_DISCARD, DEBUG_FAST_FISH
@@ -109,7 +134,8 @@ def start_fishing():
                 Stats.current_status = Stats.STATUS_DISCONNECTED
                 Stats.status_color = "red"
                 time.sleep(2); continue
-            
+            MYPLAYER_ADDR = get_myPlayer_addr(pm)
+            myPlayer = pm.read_int(MYPLAYER_ADDR)
             Stats.current_status = Stats.STATUS_CONNECTED
             Stats.status_color = "orange"
             was_bobber_active = False
@@ -131,7 +157,7 @@ def start_fishing():
                             owner = pm.read_int(proj_ptr + 0x84)
                             aiStyle = pm.read_int(proj_ptr + 0x90)
                             active = pm.read_bytes(proj_ptr + 0x102, 1)[0]
-                            if aiStyle == 61 and active != 0 and owner == 0:
+                            if aiStyle == 61 and active != 0 and owner == myPlayer:
                                 found_bobber_now = True
                                 Stats.current_status = Stats.STATUS_FISHING
                                 Stats.status_color = "#00FF00" 

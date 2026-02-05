@@ -54,7 +54,7 @@ uv run main_console.py
 
 ## 🛠️ Info
 
-* **Game Version**: Tested on **Terraria 1.4.5.3** (Single Player and Dedicated Server).
+* **Game Version**: Tested on **Terraria 1.4.5.4** (Single Player and Dedicated Server).
 * **Privileges**: Please run with **Administrator rights** to allow memory access.
 * **Environment**: Python 3.13+ (Dependencies managed by `uv`).
 
