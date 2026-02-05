@@ -12,9 +12,12 @@ import configparser
 from fish import *
 
 # --- 默认配置参数 ---
+IS_RUNNING = False
 RECAST_DELAY = 0.1
 CHECK_INTERVAL = 0.05
-DEBUG_MODE = False
+DEBUG_FORCE_FISH = False     # 调试：强制鱼 ID
+DEBUG_FAST_DISCARD = False   # 调试：瞬间放生
+DEBUG_FAST_FISH = False      # 调试：加速捕鱼 (新增)
 DEBUG_FISH = 5275
 RUN_MODE = "ALL"
 FISH_BLACKLIST = set([*FISH_JUNK, *FISH_FISH])
@@ -25,8 +28,11 @@ config = configparser.ConfigParser()
 
 def save_config():
     config['SETTINGS'] = {
+        'IS_RUNNING': str(IS_RUNNING),
         'RUN_MODE': RUN_MODE,
-        'DEBUG_MODE': str(DEBUG_MODE),
+        'DEBUG_FORCE_FISH': str(DEBUG_FORCE_FISH),
+        'DEBUG_FAST_DISCARD': str(DEBUG_FAST_DISCARD),
+        'DEBUG_FAST_FISH': str(DEBUG_FAST_FISH),
         'DEBUG_FISH': str(DEBUG_FISH)
     }
     config['LISTS'] = {
@@ -37,22 +43,24 @@ def save_config():
         config.write(f)
 
 def load_config():
-    global RUN_MODE, DEBUG_MODE, DEBUG_FISH, FISH_WHITELIST, FISH_BLACKLIST
+    global RUN_MODE, DEBUG_FISH, FISH_WHITELIST, FISH_BLACKLIST, IS_RUNNING, DEBUG_FORCE_FISH, DEBUG_FAST_DISCARD, DEBUG_FAST_FISH
     if not os.path.exists(CONFIG_FILE):
         save_config()
         return
     config.read(CONFIG_FILE, encoding='utf-8')
-    if 'SETTINGS' not in config: config['SETTINGS'] = {}
+    s = config['SETTINGS'] if 'SETTINGS' in config else {}
+    IS_RUNNING = config.getboolean('SETTINGS', 'IS_RUNNING', fallback=IS_RUNNING)
     RUN_MODE = config.get('SETTINGS', 'RUN_MODE', fallback=RUN_MODE)
-    DEBUG_MODE = config.getboolean('SETTINGS', 'DEBUG_MODE', fallback=DEBUG_MODE)
+    DEBUG_FORCE_FISH = config.getboolean('SETTINGS', 'DEBUG_FORCE_FISH', fallback=DEBUG_FORCE_FISH)
+    DEBUG_FAST_DISCARD = config.getboolean('SETTINGS', 'DEBUG_FAST_DISCARD', fallback=DEBUG_FAST_DISCARD)
+    DEBUG_FAST_FISH = config.getboolean('SETTINGS', 'DEBUG_FAST_FISH', fallback=DEBUG_FAST_FISH)
     DEBUG_FISH = config.getint('SETTINGS', 'DEBUG_FISH', fallback=DEBUG_FISH)
-    if 'LISTS' not in config: config['LISTS'] = {}
-    white_raw = config.get('LISTS', 'WHITELIST', fallback=None)
-    if white_raw is not None:
-        FISH_WHITELIST = set(map(int, white_raw.split(","))) if white_raw else set()
-    black_raw = config.get('LISTS', 'BLACKLIST', fallback=None)
-    if black_raw is not None:
-        FISH_BLACKLIST = set(map(int, black_raw.split(","))) if black_raw else set()
+    
+    if 'LISTS' in config:
+        white_raw = config.get('LISTS', 'WHITELIST', fallback="")
+        if white_raw: FISH_WHITELIST = set(map(int, white_raw.split(",")))
+        black_raw = config.get('LISTS', 'BLACKLIST', fallback="")
+        if black_raw: FISH_BLACKLIST = set(map(int, black_raw.split(",")))
     save_config()
 
 class Stats:
@@ -60,20 +68,12 @@ class Stats:
     ignored_count = 0
     fish_counts = {}      
     ignored_details = {}  
+    STATUS_STOPPED = "系统已停止"
     STATUS_DISCONNECTED = "未连接游戏"
     STATUS_CONNECTED = "已连接 | 待机中"
     STATUS_FISHING = "正在自动钓鱼"
-    current_status = STATUS_DISCONNECTED
+    current_status = STATUS_STOPPED
     status_color = "gray"
-
-class Logger:
-    COLORS = {"INFO": "\033[94m", "MODE": "\033[92m", "WARN": "\033[91m", "RESET": "\033[0m"}
-    @staticmethod
-    def log(message, level="INFO"):
-        timestamp = time.strftime("%H:%M:%S")
-        color = Logger.COLORS.get(level, Logger.COLORS["INFO"])
-        sys.stdout.write(f"\r\033[K[{timestamp}] [{color}{level}{Logger.COLORS['RESET']}] {message}\n")
-        sys.stdout.flush()
 
 def get_fish_name(fid):
     return MASTER_FISH_LIST.get(fid, f"未知({fid})")
@@ -84,7 +84,7 @@ def human_click():
     pyautogui.mouseUp()
 
 def get_base_by_pattern(pm):
-    # 提醒：根据您的设置，此处特征码搜索保持动态，不使用硬编码 staticPtr
+    # 动态搜索，不使用硬编码 staticPtr
     pattern = b"\x55\x8b\xec\x57\x56\x53\x83\xec.\x33\xc0\x89\x45.\x8b\xd9\x83\x7a\x44\x00"
     try:
         func_start = pymem.pattern.pattern_scan_all(pm.process_handle, pattern, return_multiple=False)
@@ -95,8 +95,13 @@ def get_base_by_pattern(pm):
     except: return None
 
 def start_fishing():
-    global RUN_MODE, DEBUG_MODE, DEBUG_FISH, FISH_BLACKLIST, FISH_WHITELIST
+    global RUN_MODE, DEBUG_FISH, FISH_BLACKLIST, FISH_WHITELIST, IS_RUNNING, DEBUG_FORCE_FISH, DEBUG_FAST_DISCARD, DEBUG_FAST_FISH
     while True:
+        if not IS_RUNNING:
+            Stats.current_status = Stats.STATUS_STOPPED
+            Stats.status_color = "gray"
+            time.sleep(0.5); continue
+            
         try:
             pm = pymem.Pymem("Terraria.exe")
             STATIC_PTR_ADDR = get_base_by_pattern(pm)
@@ -104,12 +109,14 @@ def start_fishing():
                 Stats.current_status = Stats.STATUS_DISCONNECTED
                 Stats.status_color = "red"
                 time.sleep(2); continue
+            
             Stats.current_status = Stats.STATUS_CONNECTED
             Stats.status_color = "orange"
             was_bobber_active = False
             triggered_by_fish = False
             ignored_this_run = False
-            while True:
+            
+            while IS_RUNNING:
                 try:
                     array_obj = pm.read_uint(STATIC_PTR_ADDR)
                     if array_obj == 0:
@@ -121,22 +128,30 @@ def start_fishing():
                         proj_ptr = pm.read_uint(proj_slot_addr)
                         if proj_ptr < 0x01000000: continue
                         try:
+                            owner = pm.read_int(proj_ptr + 0x84)
                             aiStyle = pm.read_int(proj_ptr + 0x90)
                             active = pm.read_bytes(proj_ptr + 0x102, 1)[0]
-                            if aiStyle == 61 and active != 0:
+                            if aiStyle == 61 and active != 0 and owner == 0:
                                 found_bobber_now = True
                                 Stats.current_status = Stats.STATUS_FISHING
                                 Stats.status_color = "#00FF00" 
                                 ai_base = pm.read_uint(proj_ptr + 0x40)
                                 localAI_base = pm.read_uint(proj_ptr + 0x44)
                                 if ai_base == 0 or localAI_base == 0: continue
+                                
+                                # 调试功能：加速捕鱼
+                                if DEBUG_FAST_FISH and pm.read_float(localAI_base + 0x8 + 1 * 0x4) < 660:
+                                    pm.write_float(localAI_base + 0x8 + 1 * 0x4, 659.0  )
+
+                                # 调试功能：强制生成指定鱼 ID
+                                if RUN_MODE == "ALL" and DEBUG_FORCE_FISH:
+                                    pm.write_float(localAI_base + 0x8 + 1 * 0x4, float(DEBUG_FISH))
+                                
                                 ai_1 = pm.read_float(ai_base + 0x8 + 1 * 0x4)
                                 localAI_1 = int(pm.read_float(localAI_base + 0x8 + 1 * 0x4))
-                                if RUN_MODE == "ALL" and DEBUG_MODE:
-                                    pm.write_float(localAI_base + 0x8 + 1 * 0x4, float(DEBUG_FISH))
-                                    localAI_1 = DEBUG_FISH
-                                fish_name = get_fish_name(localAI_1)
                                 Stats.current_status = f"{Stats.STATUS_FISHING} | 监测中... | 进度: {localAI_1:.0f}"
+                                
+                                fish_name = get_fish_name(localAI_1)
                                 is_target = True
                                 if RUN_MODE == "BLACKLIST":
                                     if localAI_1 in FISH_BLACKLIST: is_target = False
@@ -148,9 +163,11 @@ def start_fishing():
                                         Stats.ignored_count += 1
                                         Stats.ignored_details[fish_name] = Stats.ignored_details.get(fish_name, 0) + 1
                                         ignored_this_run = True
-                                    if DEBUG_MODE: pm.write_float(ai_base + 0x8 + 1 * 0x4, -1.0)
-                                    Stats.current_status = f"{Stats.STATUS_FISHING} | 放生中: {fish_name} | 进度: {ai_1:.0f} -> 0"
+                                    if DEBUG_FAST_DISCARD: 
+                                        pm.write_float(ai_base + 0x8 + 1 * 0x4, -1.0)
+                                    Stats.current_status = f"{Stats.STATUS_FISHING} | 放生中: {fish_name}"
                                     break
+                                
                                 if ignored_this_run and ai_1 >= 0: ignored_this_run = False
                                 if not ignored_this_run and ai_1 < 0:
                                     triggered_by_fish = True
@@ -173,15 +190,16 @@ def start_fishing():
                     time.sleep(CHECK_INTERVAL)
                 except: break
         except:
-            Stats.current_status = Stats.STATUS_DISCONNECTED
-            Stats.status_color = "red"
+            if IS_RUNNING:
+                Stats.current_status = Stats.STATUS_DISCONNECTED
+                Stats.status_color = "red"
             time.sleep(2)
 
 class FilterWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("过滤详细设置")
-        self.geometry("1400x1080") 
+        self.geometry("1400x1300") 
         self.attributes("-topmost", True)
         self.transient(parent)
         self.grab_set()
@@ -204,7 +222,7 @@ class FilterWindow(tk.Toplevel):
         canvas.pack(side="left", fill="both", expand=True, padx=5)
         scrollbar.pack(side="right", fill="y")
 
-        categories = [("🗑️ 垃圾 (Junk)", FISH_JUNK), ("🐟 普通鱼类 (Common Fish)", FISH_FISH), 
+        categories = [("🗑️ 垃圾 (Junk)", FISH_JUNK), ("🐟 普通鱼类 (Common Fish)", FISH_FISH), ("🎗️ 有用物品 (Usable Item)", FISH_USABLE_ITEMS), 
                       ("📦 宝匣 (Crates)", FISH_CRATES), ("📜 任务鱼 (Quest)", FISH_QUEST)]
         for cat_name, cat_dict in categories:
             self.render_category(cat_name, cat_dict)
@@ -245,83 +263,88 @@ def run_gui():
     root.geometry("750x900")
     root.attributes("-topmost", True)
     
-    status_container = tk.Frame(root, bg="#f0f0f0", height=40)
+    # 顶部状态与总开关
+    status_container = tk.Frame(root, bg="#f0f0f0", height=50)
     status_container.pack(fill="x", side="top")
-    status_container.pack_propagate(False)
     status_led = tk.Label(status_container, text="●", font=("Arial", 14), bg="#f0f0f0")
     status_led.pack(side="left", padx=(15, 5))
-    status_text = tk.Label(status_container, text="检测中...", font=("Microsoft YaHei", 10, "bold"), bg="#f0f0f0")
+    status_text = tk.Label(status_container, text="等待启动...", font=("Microsoft YaHei", 10, "bold"), bg="#f0f0f0")
     status_text.pack(side="left")
 
-    style = ttk.Style()
-    style.configure("Treeview", rowheight=35, font=('Microsoft YaHei', 10))
-    style.configure("Treeview.Heading", font=('Microsoft YaHei', 10, 'bold'))
+    is_running_var = tk.BooleanVar(value=IS_RUNNING)
+    def toggle_master():
+        global IS_RUNNING
+        IS_RUNNING = is_running_var.get()
+        save_config()
+    ttk.Checkbutton(status_container, text="开启自动监听", variable=is_running_var, command=toggle_master).pack(side="right", padx=20)
 
     top_config_frame = ttk.Frame(root)
     top_config_frame.pack(fill="x", padx=10, pady=10)
-    mode_frame = ttk.LabelFrame(top_config_frame, text="运行模式与详细配置")
+    
+    # 模式选择
+    mode_frame = ttk.LabelFrame(top_config_frame, text="运行模式")
     mode_frame.pack(side="top", fill="x", pady=5)
-
-    # 声明按钮变量，以便在函数中控制其状态
     filter_btn = ttk.Button(mode_frame, text="⚙ 过滤列表设置", command=lambda: FilterWindow(root))
     filter_btn.pack(side="right", padx=10)
-
     mode_var = tk.StringVar(value=RUN_MODE)
     def on_mode_change(): 
         global RUN_MODE
         RUN_MODE = mode_var.get()
-        # --- 新增逻辑：如果是 ALL 模式，禁用过滤按钮 ---
-        if RUN_MODE == "ALL":
-            filter_btn.config(state="disabled")
-        else:
-            filter_btn.config(state="normal")
-        
-        Logger.log(f"模式切换至: {RUN_MODE}", "MODE")
+        filter_btn.config(state="disabled" if RUN_MODE == "ALL" else "normal")
         save_config()
-
     for m in [("黑名单", "BLACKLIST"), ("白名单", "WHITELIST"), ("全部捕获", "ALL")]:
         ttk.Radiobutton(mode_frame, text=m[0], variable=mode_var, value=m[1], command=on_mode_change).pack(side="left", padx=15, pady=5)
 
-    # 初始化时检查一次按钮状态
-    if RUN_MODE == "ALL":
-        filter_btn.config(state="disabled")
-
-    debug_frame = ttk.LabelFrame(top_config_frame, text="调试模式: 将加速放生")
+    # --- 调试功能重构为两行 ---
+    debug_frame = ttk.LabelFrame(top_config_frame, text="调试功能")
     debug_frame.pack(side="top", fill="x", pady=5)
-    debug_val = tk.BooleanVar(value=DEBUG_MODE)
-    def toggle_debug():
-        global DEBUG_MODE
-        DEBUG_MODE = debug_val.get()
-        save_config()
+
+    # 第一行：加速功能
+    row1 = ttk.Frame(debug_frame)
+    row1.pack(fill="x", padx=10, pady=2)
     
-    ttk.Checkbutton(debug_frame, text="调试模式", variable=debug_val, command=toggle_debug).pack(side="left", padx=10, pady=5)
-    ttk.Label(debug_frame, text="强制生成鱼ID (仅 ALL 模式有效):").pack(side="left", padx=(20, 5))
+    fast_fish_val = tk.BooleanVar(value=DEBUG_FAST_FISH)
+    def toggle_fast_fish():
+        global DEBUG_FAST_FISH
+        DEBUG_FAST_FISH = fast_fish_val.get(); save_config()
+    ttk.Checkbutton(row1, text="加速捕鱼 (瞬间咬钩)", variable=fast_fish_val, command=toggle_fast_fish).pack(side="left", padx=5)
+
+    fast_discard_val = tk.BooleanVar(value=DEBUG_FAST_DISCARD)
+    def toggle_fast_discard():
+        global DEBUG_FAST_DISCARD
+        DEBUG_FAST_DISCARD = fast_discard_val.get(); save_config()
+    ttk.Checkbutton(row1, text="加速放生 (自动过滤)", variable=fast_discard_val, command=toggle_fast_discard).pack(side="left", padx=20)
+
+    # 第二行：修改功能
+    row2 = ttk.Frame(debug_frame)
+    row2.pack(fill="x", padx=10, pady=2)
+    
+    force_fish_val = tk.BooleanVar(value=DEBUG_FORCE_FISH)
+    def toggle_force_fish():
+        global DEBUG_FORCE_FISH
+        DEBUG_FORCE_FISH = force_fish_val.get(); save_config()
+    ttk.Checkbutton(row2, text="强制修改鱼 ID (仅全部模式):", variable=force_fish_val, command=toggle_force_fish).pack(side="left", padx=5)
     
     fish_id_var = tk.StringVar(value=str(DEBUG_FISH))
     def on_id_change(*args):
         global DEBUG_FISH
         try:
-            v = fish_id_var.get()
-            if v: 
-                DEBUG_FISH = int(v)
-                save_config()
+            if fish_id_var.get(): DEBUG_FISH = int(fish_id_var.get()); save_config()
         except: pass
     fish_id_var.trace_add("write", on_id_change)
-    ttk.Entry(debug_frame, textvariable=fish_id_var, width=10).pack(side="left", pady=5)
+    ttk.Entry(row2, textvariable=fish_id_var, width=8).pack(side="left", padx=5)
 
+    # 数据列表部分
     stat_label = ttk.Label(root, text="准备中...", font=("Microsoft YaHei", 11, "bold"))
     stat_label.pack(pady=10)
-
     paned = ttk.PanedWindow(root, orient="horizontal")
     paned.pack(fill="both", expand=True, padx=10, pady=5)
-
     f1 = ttk.LabelFrame(paned, text="收获清单")
     tree_hit = ttk.Treeview(f1, columns=("n", "c"), show="headings")
     tree_hit.heading("n", text="物品名"); tree_hit.heading("c", text="数量")
     tree_hit.column("n", width=140, anchor="w"); tree_hit.column("c", width=60, anchor="center")
     tree_hit.pack(fill="both", expand=True)
     paned.add(f1, weight=1)
-
     f2 = ttk.LabelFrame(paned, text="放生清单")
     tree_ignore = ttk.Treeview(f2, columns=("n", "c"), show="headings")
     tree_ignore.heading("n", text="物品名"); tree_ignore.heading("c", text="数量")
@@ -329,17 +352,20 @@ def run_gui():
     tree_ignore.pack(fill="both", expand=True)
     paned.add(f2, weight=1)
 
+    style = ttk.Style()
+    style.configure("Treeview", rowheight=35, font=('Microsoft YaHei', 10))
+
     def update_ui():
         status_led.config(foreground=Stats.status_color)
         status_text.config(text=Stats.current_status)
-        stat_label.config(text=f"已捕获: {Stats.caught_count} | 已放生: {Stats.ignored_count} | 模式: {RUN_MODE}")
+        stat_label.config(text=f"已捕获: {Stats.caught_count} | 已放生: {Stats.ignored_count}")
         for i in tree_hit.get_children(): tree_hit.delete(i)
         for n, c in sorted(Stats.fish_counts.items(), key=lambda x: x[1], reverse=True):
             tree_hit.insert("", "end", values=(n, c))
         for i in tree_ignore.get_children(): tree_ignore.delete(i)
         for n, c in sorted(Stats.ignored_details.items(), key=lambda x: x[1], reverse=True):
             tree_ignore.insert("", "end", values=(n, c))
-        root.after(100, update_ui)
+        root.after(200, update_ui)
 
     update_ui()
     root.mainloop()
