@@ -166,7 +166,7 @@ def start_fishing():
                                 if ai_base == 0 or localAI_base == 0: continue
                                 
                                 # 调试功能：加速捕鱼
-                                if DEBUG_FAST_FISH and pm.read_float(localAI_base + 0x8 + 1 * 0x4) < 660:
+                                if DEBUG_FAST_FISH and 0 < pm.read_float(localAI_base + 0x8 + 1 * 0x4) < 660:
                                     pm.write_float(localAI_base + 0x8 + 1 * 0x4, 659.0  )
 
                                 # 调试功能：强制生成指定鱼 ID
